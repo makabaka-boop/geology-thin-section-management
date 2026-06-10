@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Optional, List
 
 from database import engine, get_db, Base
-from models import Lithology, Drawer, CourseBatch, Borrower, ThinSection, BorrowRecord, BorrowReservation
+from models import Lithology, Drawer, CourseBatch, Borrower, ThinSection, BorrowRecord, BorrowReservation, RepairRecord
 import schemas
 
 Base.metadata.create_all(bind=engine)
@@ -256,12 +256,19 @@ def list_thin_section(db: Session = Depends(get_db)):
     return success_response(sections)
 
 
-@app.get("/api/thin-section/{section_id}", response_model=schemas.ResponseModel[schemas.ThinSection])
+@app.get("/api/thin-section/{section_id}", response_model=schemas.ResponseModel[schemas.ThinSectionDetail])
 def get_thin_section(section_id: int, db: Session = Depends(get_db)):
     section = db.query(ThinSection).filter(ThinSection.id == section_id).first()
     if not section:
         return error_response(404, "薄片不存在")
-    return success_response(section)
+    repair_records = db.query(RepairRecord).filter(
+        RepairRecord.thin_section_id == section_id
+    ).order_by(RepairRecord.created_at.desc()).all()
+    current_repair = next((r for r in repair_records if r.status == "维修中"), None)
+    data = schemas.ThinSectionDetail.model_validate(section).model_dump()
+    data["repair_records"] = [schemas.RepairRecord.model_validate(r).model_dump() for r in repair_records]
+    data["current_repair"] = schemas.RepairRecord.model_validate(current_repair).model_dump() if current_repair else None
+    return success_response(data)
 
 
 @app.put("/api/thin-section/{section_id}", response_model=schemas.ResponseModel[schemas.ThinSection])
@@ -281,7 +288,16 @@ def update_thin_section(section_id: int, section: schemas.ThinSectionUpdate, db:
         drawer = db.query(Drawer).filter(Drawer.id == section.drawer_id).first()
         if not drawer:
             return error_response(404, "抽屉不存在")
-    for key, value in section.model_dump(exclude_unset=True).items():
+    update_data = section.model_dump(exclude_unset=True)
+    if db_section.status == "维修中":
+        if "status" in update_data and update_data["status"] != "维修中":
+            return error_response(400, "薄片处于维修中，状态需通过维修完成接口流转")
+        if "label_status" in update_data and update_data["label_status"] != db_section.label_status:
+            return error_response(400, "薄片处于维修中，标签状态需通过维修完成接口更新")
+    if db_section.status == "已报废":
+        if "status" in update_data and update_data["status"] != "已报废":
+            return error_response(400, "薄片已报废，不可修改状态")
+    for key, value in update_data.items():
         setattr(db_section, key, value)
     db.commit()
     db.refresh(db_section)
@@ -307,6 +323,8 @@ def create_borrow(record: schemas.BorrowRecordCreate, db: Session = Depends(get_
         return error_response(400, "该薄片已借出，不可重复借用")
     if section.status == "维修中":
         return error_response(400, "该薄片正在维修中，不可借出")
+    if section.status == "已报废":
+        return error_response(400, "该薄片已报废，不可借出")
     if record.borrow_quantity <= 0:
         return error_response(400, "借出数量必须大于0")
     borrower = db.query(Borrower).filter(Borrower.id == record.borrower_id).first()
@@ -346,8 +364,31 @@ def return_borrow(record_id: int, return_data: schemas.BorrowRecordReturn, db: S
         section.status = "在库"
         if return_data.label_worn and section.label_status == "完好":
             section.label_status = "磨损"
-        if (return_data.has_crack or return_data.has_stain) and return_data.reinspection_result != "合格":
+        has_damage = return_data.has_crack or return_data.has_stain or return_data.label_worn
+        if has_damage and return_data.reinspection_result != "合格":
             section.status = "维修中"
+            damage_types = []
+            if return_data.has_crack:
+                damage_types.append("裂纹")
+            if return_data.has_stain:
+                damage_types.append("污渍")
+            if return_data.label_worn:
+                damage_types.append("标签磨损")
+            existing_repair = db.query(RepairRecord).filter(
+                RepairRecord.borrow_record_id == record.id,
+                RepairRecord.status == "维修中"
+            ).first()
+            if not existing_repair:
+                repair = RepairRecord(
+                    thin_section_id=section.id,
+                    borrow_record_id=record.id,
+                    problem_source="归还复检",
+                    damage_type="、".join(damage_types) if damage_types else None,
+                    damage_description=return_data.return_remarks,
+                    send_repair_date=return_data.return_date,
+                    status="维修中",
+                )
+                db.add(repair)
     
     db.commit()
     db.refresh(record)
@@ -396,7 +437,8 @@ def get_damage_reinspection_queue(db: Session = Depends(get_db)):
         BorrowRecord.is_returned == True,
         or_(
             BorrowRecord.has_crack == True,
-            BorrowRecord.has_stain == True
+            BorrowRecord.has_stain == True,
+            BorrowRecord.label_worn == True
         ),
         BorrowRecord.reinspection_result != "合格"
     ).all()
@@ -408,13 +450,21 @@ def get_damage_reinspection_queue(db: Session = Depends(get_db)):
             damage_types.append("裂纹")
         if record.has_stain:
             damage_types.append("污渍")
+        if record.label_worn:
+            damage_types.append("标签磨损")
+        repair = db.query(RepairRecord).filter(
+            RepairRecord.borrow_record_id == record.id
+        ).order_by(RepairRecord.created_at.desc()).first()
         result.append({
             "borrow_id": record.id,
             "section_no": record.thin_section.section_no,
             "section_name": record.thin_section.name,
             "borrower_name": record.borrower.name,
             "damage_type": "、".join(damage_types),
-            "return_date": record.return_date
+            "return_date": record.return_date,
+            "repair_id": repair.id if repair else None,
+            "repair_status": repair.status if repair else "未送修",
+            "repair_result": repair.repair_result if repair else None,
         })
     return success_response(result)
 
@@ -561,6 +611,10 @@ def check_reservation_conflict(thin_section_id: int, db: Session, exclude_reserv
     section = db.query(ThinSection).filter(ThinSection.id == thin_section_id).first()
     if section and section.status == "借出":
         return "该薄片已借出，不可预约"
+    if section and section.status == "维修中":
+        return "该薄片正在维修中，不可预约"
+    if section and section.status == "已报废":
+        return "该薄片已报废，不可预约"
     
     query = db.query(BorrowReservation).filter(
         BorrowReservation.thin_section_id == thin_section_id,
@@ -714,6 +768,8 @@ def convert_to_borrow(reservation_id: int, data: schemas.BorrowReservationConver
         return error_response(400, "该薄片已借出，不可重复借用")
     if section.status == "维修中":
         return error_response(400, "该薄片正在维修中，不可借出")
+    if section.status == "已报废":
+        return error_response(400, "该薄片已报废，不可借出")
     
     borrow_record = BorrowRecord(
         thin_section_id=reservation.thin_section_id,
@@ -736,6 +792,160 @@ def convert_to_borrow(reservation_id: int, data: schemas.BorrowReservationConver
     db.refresh(reservation)
     
     return success_response(borrow_record)
+
+
+@app.post("/api/repair", response_model=schemas.ResponseModel[schemas.RepairRecord])
+def create_repair(repair: schemas.RepairRecordCreate, db: Session = Depends(get_db)):
+    section = db.query(ThinSection).filter(ThinSection.id == repair.thin_section_id).first()
+    if not section:
+        return error_response(404, "薄片不存在")
+    if section.status == "借出":
+        return error_response(400, "该薄片已借出，不可创建维修记录")
+    if section.status == "已报废":
+        return error_response(400, "该薄片已报废，不可创建维修记录")
+    
+    in_repair = db.query(RepairRecord).filter(
+        RepairRecord.thin_section_id == repair.thin_section_id,
+        RepairRecord.status == "维修中"
+    ).first()
+    if in_repair:
+        return error_response(400, "该薄片已存在进行中的维修记录，不可重复创建")
+    
+    if repair.borrow_record_id:
+        br = db.query(BorrowRecord).filter(BorrowRecord.id == repair.borrow_record_id).first()
+        if not br:
+            return error_response(404, "借阅记录不存在")
+        if br.thin_section_id != repair.thin_section_id:
+            return error_response(400, "借阅记录与薄片不匹配，禁止串单")
+        if not br.is_returned:
+            return error_response(400, "借阅记录尚未归还，不可创建维修单")
+        existed = db.query(RepairRecord).filter(
+            RepairRecord.borrow_record_id == repair.borrow_record_id
+        ).first()
+        if existed:
+            return error_response(400, "该借阅记录已存在维修单，不可重复创建")
+    
+    db_repair = RepairRecord(**repair.model_dump(), status="维修中")
+    db.add(db_repair)
+    section.status = "维修中"
+    
+    pending_reservations = db.query(BorrowReservation).filter(
+        BorrowReservation.thin_section_id == repair.thin_section_id,
+        BorrowReservation.status.in_(["待审批", "已通过"])
+    ).all()
+    for r in pending_reservations:
+        r.status = "已取消"
+        r.approval_remarks = (r.approval_remarks or "") + " [系统自动取消：薄片进入维修]"
+    
+    db.commit()
+    db.refresh(db_repair)
+    return success_response(db_repair)
+
+
+@app.get("/api/repair", response_model=schemas.ResponseModel[List[schemas.RepairRecord]])
+def list_repair(
+    status: Optional[str] = Query(None, description="维修状态：维修中/维修完成/已报废"),
+    section_no: Optional[str] = Query(None, description="薄片编号"),
+    problem_source: Optional[str] = Query(None, description="问题来源"),
+    repair_manager: Optional[str] = Query(None, description="维修负责人"),
+    start_date: Optional[date] = Query(None, description="送修开始日期"),
+    end_date: Optional[date] = Query(None, description="送修结束日期"),
+    db: Session = Depends(get_db)
+):
+    query = db.query(RepairRecord)
+    if status:
+        query = query.filter(RepairRecord.status == status)
+    if problem_source:
+        query = query.filter(RepairRecord.problem_source == problem_source)
+    if repair_manager:
+        query = query.filter(RepairRecord.repair_manager.contains(repair_manager))
+    if start_date:
+        query = query.filter(RepairRecord.send_repair_date >= start_date)
+    if end_date:
+        query = query.filter(RepairRecord.send_repair_date <= end_date)
+    if section_no:
+        query = query.join(ThinSection, RepairRecord.thin_section_id == ThinSection.id)
+        query = query.filter(ThinSection.section_no.contains(section_no))
+    
+    records = query.order_by(RepairRecord.created_at.desc()).all()
+    return success_response(records)
+
+
+@app.get("/api/repair/{repair_id}", response_model=schemas.ResponseModel[schemas.RepairRecord])
+def get_repair(repair_id: int, db: Session = Depends(get_db)):
+    repair = db.query(RepairRecord).filter(RepairRecord.id == repair_id).first()
+    if not repair:
+        return error_response(404, "维修记录不存在")
+    return success_response(repair)
+
+
+@app.put("/api/repair/{repair_id}/finish", response_model=schemas.ResponseModel[schemas.RepairRecord])
+def finish_repair(repair_id: int, data: schemas.RepairRecordFinish, db: Session = Depends(get_db)):
+    repair = db.query(RepairRecord).filter(RepairRecord.id == repair_id).first()
+    if not repair:
+        return error_response(404, "维修记录不存在")
+    if repair.status != "维修中":
+        return error_response(400, "只有维修中状态的记录可以完成处理")
+    if data.repair_result not in ("恢复在库", "报废", "无法修复"):
+        return error_response(400, "维修结果取值非法")
+    
+    repair.repair_result = data.repair_result
+    repair.finish_date = data.finish_date
+    repair.handle_remarks = data.handle_remarks
+    repair.new_label_status = data.new_label_status
+    
+    section = db.query(ThinSection).filter(ThinSection.id == repair.thin_section_id).first()
+    if section:
+        if data.repair_result == "恢复在库":
+            repair.status = "维修完成"
+            section.status = "在库"
+            if data.new_label_status:
+                section.label_status = data.new_label_status
+            extra = f"[维修完成于{data.finish_date}]"
+            section.remarks = (section.remarks + " " + extra) if section.remarks else extra
+        elif data.repair_result in ("报废", "无法修复"):
+            repair.status = "已报废"
+            section.status = "已报废"
+            extra = f"[{data.repair_result}于{data.finish_date}]"
+            section.remarks = (section.remarks + " " + extra) if section.remarks else extra
+    
+    db.commit()
+    db.refresh(repair)
+    return success_response(repair)
+
+
+@app.get("/api/queue/in-repair", response_model=schemas.ResponseModel[List[schemas.RepairRecord]])
+def get_in_repair_queue(db: Session = Depends(get_db)):
+    records = db.query(RepairRecord).filter(
+        RepairRecord.status == "维修中"
+    ).order_by(RepairRecord.send_repair_date.asc()).all()
+    return success_response(records)
+
+
+@app.get("/api/statistics/repair-summary", response_model=schemas.ResponseModel[List[schemas.RepairStatItem]])
+def get_repair_summary(db: Session = Depends(get_db)):
+    sections = db.query(ThinSection).join(
+        RepairRecord, ThinSection.id == RepairRecord.thin_section_id
+    ).distinct().all()
+    
+    data = []
+    for section in sections:
+        records = db.query(RepairRecord).filter(
+            RepairRecord.thin_section_id == section.id
+        ).order_by(RepairRecord.created_at.desc()).all()
+        in_repair = any(r.status == "维修中" for r in records)
+        last = records[0] if records else None
+        data.append({
+            "section_id": section.id,
+            "section_no": section.section_no,
+            "section_name": section.name,
+            "repair_count": len(records),
+            "in_repair": in_repair,
+            "last_repair_date": last.send_repair_date if last else None,
+            "last_repair_result": last.repair_result if last else None,
+        })
+    data.sort(key=lambda x: x["repair_count"], reverse=True)
+    return success_response(data)
 
 
 if __name__ == "__main__":
