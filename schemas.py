@@ -126,6 +126,8 @@ class ThinSection(ThinSectionBase):
     updated_at: datetime
     lithology: Optional[Lithology] = None
     drawer: Optional[Drawer] = None
+    maintenance_records: Optional[List['MaintenanceRecordBrief']] = None
+    current_maintenance: Optional['MaintenanceRecordBrief'] = None
 
     class Config:
         from_attributes = True
@@ -191,6 +193,8 @@ class DamageReinspectionItem(BaseModel):
     borrower_name: str
     damage_type: str
     return_date: date
+    maintenance_status: Optional[str] = None
+    maintenance_id: Optional[int] = None
 
 
 class MissingLabelItem(BaseModel):
@@ -265,6 +269,88 @@ class BorrowReservation(BorrowReservationBase):
 
     class Config:
         from_attributes = True
+
+
+class MaintenanceRecordBase(BaseModel):
+    thin_section_id: int
+    borrow_record_id: Optional[int] = None
+    problem_source: str = Field(..., description="问题来源：归还复检/人工标记/其他")
+    damage_type: str = Field(..., description="损坏类型：裂纹/污渍/标签磨损/破碎/其他")
+    damage_description: Optional[str] = None
+    maintenance_person: str
+    send_date: date
+    expected_completion_date: Optional[date] = None
+
+
+class MaintenanceRecordCreate(MaintenanceRecordBase):
+    pass
+
+
+class MaintenanceRecordComplete(BaseModel):
+    result: str = Field(..., description="维修结果：维修完成/报废/恢复在库")
+    processing_notes: Optional[str] = None
+    actual_completion_date: Optional[date] = None
+
+
+class MaintenanceRecordBrief(BaseModel):
+    id: int
+    thin_section_id: int
+    borrow_record_id: Optional[int] = None
+    problem_source: str
+    damage_type: str
+    damage_description: Optional[str] = None
+    maintenance_person: str
+    send_date: date
+    expected_completion_date: Optional[date] = None
+    actual_completion_date: Optional[date] = None
+    result: Optional[str] = None
+    processing_notes: Optional[str] = None
+    status: str = "维修中"
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MaintenanceRecord(MaintenanceRecordBase):
+    id: int
+    actual_completion_date: Optional[date] = None
+    result: Optional[str] = None
+    processing_notes: Optional[str] = None
+    status: str = "维修中"
+    created_at: datetime
+    updated_at: datetime
+    thin_section: Optional[ThinSection] = None
+    borrow_record: Optional[BorrowRecord] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MaintenanceRecordItem(BaseModel):
+    id: int
+    thin_section_id: int
+    section_no: Optional[str] = None
+    section_name: Optional[str] = None
+    problem_source: str
+    damage_type: str
+    damage_description: Optional[str] = None
+    maintenance_person: str
+    send_date: date
+    expected_completion_date: Optional[date] = None
+    actual_completion_date: Optional[date] = None
+    result: Optional[str] = None
+    processing_notes: Optional[str] = None
+    status: str
+
+
+class MaintenanceStatisticsItem(BaseModel):
+    total_count: int
+    in_progress_count: int
+    completed_count: int
+    scrapped_count: int
+    restored_count: int
 
 
 class PageResult(BaseModel, Generic[T]):
