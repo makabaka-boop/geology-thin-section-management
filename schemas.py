@@ -191,6 +191,9 @@ class DamageReinspectionItem(BaseModel):
     borrower_name: str
     damage_type: str
     return_date: date
+    repair_id: Optional[int] = None
+    repair_status: Optional[str] = None
+    repair_result: Optional[str] = None
 
 
 class MissingLabelItem(BaseModel):
@@ -270,3 +273,59 @@ class BorrowReservation(BorrowReservationBase):
 class PageResult(BaseModel, Generic[T]):
     total: int
     items: List[T]
+
+
+class RepairRecordBase(BaseModel):
+    thin_section_id: int
+    borrow_record_id: Optional[int] = None
+    problem_source: Optional[str] = "人工标记"
+    damage_type: Optional[str] = None
+    damage_description: Optional[str] = None
+    repair_manager: Optional[str] = None
+    send_repair_date: Optional[date] = None
+    expected_finish_date: Optional[date] = None
+    remarks: Optional[str] = None
+
+
+class RepairRecordCreate(RepairRecordBase):
+    pass
+
+
+class RepairRecordFinish(BaseModel):
+    repair_result: str = Field(..., description="维修结果：恢复在库/报废/无法修复")
+    finish_date: date
+    handle_remarks: Optional[str] = None
+    new_label_status: Optional[str] = None
+
+
+class RepairRecord(RepairRecordBase):
+    id: int
+    status: str
+    repair_result: Optional[str] = None
+    finish_date: Optional[date] = None
+    handle_remarks: Optional[str] = None
+    new_label_status: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    thin_section: Optional[ThinSection] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ThinSectionDetail(ThinSection):
+    repair_records: List[RepairRecord] = []
+    current_repair: Optional[RepairRecord] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RepairStatItem(BaseModel):
+    section_id: int
+    section_no: str
+    section_name: Optional[str]
+    repair_count: int
+    in_repair: bool
+    last_repair_date: Optional[date]
+    last_repair_result: Optional[str]
