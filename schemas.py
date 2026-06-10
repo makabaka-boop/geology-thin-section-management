@@ -120,17 +120,6 @@ class ThinSectionUpdate(ThinSectionBase):
     section_no: Optional[str] = None
 
 
-class ThinSection(ThinSectionBase):
-    id: int
-    created_at: datetime
-    updated_at: datetime
-    lithology: Optional[Lithology] = None
-    drawer: Optional[Drawer] = None
-
-    class Config:
-        from_attributes = True
-
-
 class BorrowRecordBase(BaseModel):
     thin_section_id: int
     borrower_id: int
@@ -167,9 +156,68 @@ class BorrowRecord(BorrowRecordBase):
     return_remarks: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    thin_section: Optional[ThinSection] = None
+    thin_section: Optional["ThinSection"] = None
     borrower: Optional[Borrower] = None
     course_batch: Optional[CourseBatch] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RepairRecordBase(BaseModel):
+    thin_section_id: int
+    problem_source: Optional[str] = None
+    borrow_record_id: Optional[int] = None
+    damage_type: Optional[str] = None
+    repair_responsible: Optional[str] = None
+    send_repair_date: date
+    expected_complete_date: Optional[date] = None
+    remarks: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class RepairRecordCreate(RepairRecordBase):
+    pass
+
+
+class RepairRecordComplete(BaseModel):
+    actual_complete_date: date
+    repair_result: str
+    label_status_after: Optional[str] = None
+    process_description: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+class RepairRecordSimple(RepairRecordBase):
+    id: int
+    actual_complete_date: Optional[date] = None
+    repair_result: Optional[str] = None
+    label_status_after: Optional[str] = None
+    process_description: Optional[str] = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RepairRecord(RepairRecordSimple):
+    thin_section: Optional["ThinSection"] = None
+    borrow_record: Optional[BorrowRecord] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ThinSection(ThinSectionBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    lithology: Optional[Lithology] = None
+    drawer: Optional[Drawer] = None
+    current_repair: Optional[RepairRecordSimple] = None
+    repair_history: Optional[List[RepairRecordSimple]] = None
 
     class Config:
         from_attributes = True
@@ -186,11 +234,14 @@ class OverdueItem(BaseModel):
 
 class DamageReinspectionItem(BaseModel):
     borrow_id: int
+    section_id: int
     section_no: str
     section_name: Optional[str]
     borrower_name: str
     damage_type: str
     return_date: date
+    section_status: str
+    has_repair_record: bool
 
 
 class MissingLabelItem(BaseModel):
@@ -215,6 +266,27 @@ class DrawerUsageItem(BaseModel):
     capacity: int
     used_count: int
     usage_rate: float
+
+
+class RepairQueueItem(BaseModel):
+    repair_id: int
+    section_id: int
+    section_no: str
+    section_name: Optional[str]
+    problem_source: Optional[str]
+    damage_type: Optional[str]
+    repair_responsible: Optional[str]
+    send_repair_date: date
+    expected_complete_date: Optional[date]
+    overdue_days: int
+
+
+class RepairStatisticsItem(BaseModel):
+    total_repair_count: int
+    in_repair_count: int
+    completed_count: int
+    scrapped_count: int
+    recovered_count: int
 
 
 class BorrowReservationBase(BaseModel):
