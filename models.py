@@ -57,7 +57,7 @@ class Borrower(Base):
 
 class ThinSection(Base):
     __tablename__ = "thin_section"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     section_no = Column(String(50), unique=True, nullable=False, comment="薄片编号")
     name = Column(String(100), comment="薄片名称")
@@ -66,15 +66,16 @@ class ThinSection(Base):
     thickness = Column(String(50), comment="厚度")
     preparation_date = Column(Date, comment="制备日期")
     label_status = Column(String(20), default="完好", comment="标签状态：完好/磨损/缺失")
-    status = Column(String(20), default="在库", comment="状态：在库/借出/维修中")
+    status = Column(String(20), default="在库", comment="状态：在库/借出/维修中/报废")
     remarks = Column(Text, comment="备注")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    
+
     lithology = relationship("Lithology", back_populates="thin_sections")
     drawer = relationship("Drawer", back_populates="thin_sections")
     borrow_records = relationship("BorrowRecord", back_populates="thin_section")
     reservations = relationship("BorrowReservation", back_populates="thin_section")
+    repair_records = relationship("RepairRecord", back_populates="thin_section")
 
 
 class BorrowReservation(Base):
@@ -130,3 +131,27 @@ class BorrowRecord(Base):
     thin_section = relationship("ThinSection", back_populates="borrow_records")
     borrower = relationship("Borrower", back_populates="borrow_records")
     course_batch = relationship("CourseBatch", back_populates="borrow_records")
+
+
+class RepairRecord(Base):
+    __tablename__ = "repair_record"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thin_section_id = Column(Integer, ForeignKey("thin_section.id"), nullable=False, comment="薄片ID")
+    problem_source = Column(String(50), nullable=False, comment="问题来源：归还复检/人工标记")
+    damage_type = Column(String(100), comment="损坏类型：裂纹/污渍/标签磨损/其他")
+    repair_person = Column(String(100), comment="维修负责人")
+    send_date = Column(Date, comment="送修日期")
+    expected_complete_date = Column(Date, comment="预计完成日期")
+    actual_complete_date = Column(Date, comment="实际完成日期")
+    repair_result = Column(String(20), comment="维修结果：维修完成/报废/恢复在库")
+    handle_remark = Column(Text, comment="处理说明")
+    related_borrow_id = Column(Integer, ForeignKey("borrow_record.id"), comment="关联借阅记录ID")
+    created_by = Column(String(100), comment="创建人")
+    status = Column(String(20), default="维修中", comment="维修状态：维修中/已完成")
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    thin_section = relationship("ThinSection", back_populates="repair_records")
+    related_borrow = relationship("BorrowRecord")

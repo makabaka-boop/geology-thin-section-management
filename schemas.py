@@ -186,11 +186,14 @@ class OverdueItem(BaseModel):
 
 class DamageReinspectionItem(BaseModel):
     borrow_id: int
+    section_id: int
     section_no: str
     section_name: Optional[str]
     borrower_name: str
     damage_type: str
     return_date: date
+    repair_status: Optional[str] = None
+    repair_id: Optional[int] = None
 
 
 class MissingLabelItem(BaseModel):
@@ -199,6 +202,8 @@ class MissingLabelItem(BaseModel):
     section_name: Optional[str]
     label_status: str
     last_borrow_date: Optional[date]
+    repair_status: Optional[str] = None
+    repair_id: Optional[int] = None
 
 
 class DamageCourseItem(BaseModel):
@@ -265,6 +270,62 @@ class BorrowReservation(BorrowReservationBase):
 
     class Config:
         from_attributes = True
+
+
+class RepairRecordBase(BaseModel):
+    thin_section_id: int
+    problem_source: str
+    damage_type: Optional[str] = None
+    repair_person: Optional[str] = None
+    send_date: Optional[date] = None
+    expected_complete_date: Optional[date] = None
+    handle_remark: Optional[str] = None
+    related_borrow_id: Optional[int] = None
+    created_by: Optional[str] = None
+
+
+class RepairRecordCreate(RepairRecordBase):
+    pass
+
+
+class RepairRecordComplete(BaseModel):
+    repair_result: str
+    actual_complete_date: Optional[date] = None
+    handle_remark: Optional[str] = None
+    update_label_status: Optional[str] = None
+    update_remarks: Optional[str] = None
+
+
+class RepairRecordUpdate(BaseModel):
+    problem_source: Optional[str] = None
+    damage_type: Optional[str] = None
+    repair_person: Optional[str] = None
+    send_date: Optional[date] = None
+    expected_complete_date: Optional[date] = None
+    handle_remark: Optional[str] = None
+
+
+class RepairRecord(RepairRecordBase):
+    id: int
+    status: str
+    actual_complete_date: Optional[date] = None
+    repair_result: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    thin_section: Optional[ThinSection] = None
+    related_borrow: Optional[BorrowRecord] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ThinSectionDetail(ThinSection):
+    repair_records: Optional[List[RepairRecord]] = None
+
+
+class RepairStatisticsItem(BaseModel):
+    status: str
+    count: int
 
 
 class PageResult(BaseModel, Generic[T]):
